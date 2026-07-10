@@ -1,26 +1,103 @@
 @import "tailwindcss";
 
+/*
+ * Drafting-table design tokens.
+ *
+ * Two themes, switched via `data-theme` on <html> (persisted in
+ * localStorage, applied pre-paint by an inline script in the root layout):
+ *  - blueprint (default): deep cyan-blue ground, white/cyan linework
+ *  - draft: warm graph-paper white, graphite linework
+ *
+ * Semantic roles, not raw colors: components reference --color-* utilities
+ * (via @theme inline) so both themes stay in sync.
+ */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* ---- Blueprint (default) ---- */
+  --ground: #0b2942; /* drawing surface */
+  --surface: #0e3050; /* panels / chrome */
+  --surface-edge: #2b5a86; /* panel borders */
+  --ink: #e8f2fb; /* primary text */
+  --ink-muted: #9dbcd8; /* secondary text */
+  --line: #d5e8f9; /* primary linework */
+  --line-strong: #ffffff;
+  --line-faint: rgba(213, 232, 249, 0.38);
+  --grid-minor: rgba(141, 194, 238, 0.12);
+  --grid-major: rgba(141, 194, 238, 0.28);
+  --accent: #4fc3f7; /* cyan pencil */
+  --accent-ink: #062536; /* text on accent fills */
+  --trace: #ffd166; /* coupler-curve highlight */
+  --danger: #ff8484;
+}
+
+[data-theme="draft"] {
+  /* ---- Draft: warm paper + graphite ---- */
+  --ground: #f7f4ec;
+  --surface: #fffdf7;
+  --surface-edge: #d9d2c0;
+  --ink: #26282b;
+  --ink-muted: #5c6470;
+  --line: #33383f;
+  --line-strong: #17191c;
+  --line-faint: rgba(38, 44, 52, 0.35);
+  --grid-minor: rgba(96, 126, 168, 0.16);
+  --grid-major: rgba(96, 126, 168, 0.34);
+  --accent: #b03d24; /* drafting-pencil red */
+  --accent-ink: #fff6ef;
+  --trace: #8a5a00;
+  --danger: #b3261e;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-ground: var(--ground);
+  --color-surface: var(--surface);
+  --color-surface-edge: var(--surface-edge);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-line-faint: var(--line-faint);
+  --color-grid-minor: var(--grid-minor);
+  --color-grid-major: var(--grid-major);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-trace: var(--trace);
+  --color-danger: var(--danger);
+  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "SFMono-Regular", monospace;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+/*
+ * Graph-paper ground: 5 mm minor / 25 mm major ruling at the shell's
+ * default 4 px/mm. Phase 2 redraws this in canvas world space for pan/zoom.
+ */
+.graph-paper {
+  background-color: var(--ground);
+  background-image:
+    linear-gradient(var(--grid-major) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-major) 1px, transparent 1px),
+    linear-gradient(var(--grid-minor) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-minor) 1px, transparent 1px);
+  background-size:
+    100px 100px,
+    100px 100px,
+    20px 20px,
+    20px 20px;
+}
+
+/* Theme toggle: visual state driven purely by the html[data-theme]
+ * attribute so the button never needs client state for its looks. */
+.theme-option {
+  color: var(--ink-muted);
+}
+:root:not([data-theme="draft"]) .theme-option-blueprint,
+[data-theme="draft"] .theme-option-draft {
+  color: var(--accent-ink);
+  background: var(--accent);
 }
