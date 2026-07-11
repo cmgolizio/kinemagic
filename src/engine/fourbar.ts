@@ -1,233 +1,180 @@
 /**
  * Four-bar linkage solver.
  *
- * Conventions (see docs/build-plan.md, Phase 1):
- * - Ground pivots O2 (crank/input) and O4 (output/rocker) are stored in world
- *   coordinates so the mechanism can be positioned/rotated freely. The ground
- *   link length r1 is derived: `|O4 - O2|`.
- * - Link lengths in mm: crankLen (r2), couplerLen (r3), rockerLen (r4).
- * - Input angle theta2 is measured in world frame, radians CCW from +x.
+ * Conventions:
+ * - Ground pivots O2 (crank/input) and O4 (rocker/output) are stored in world
+ *   coordinates (mm, Y up) so the mechanism can be positioned freely.
+ * - Link lengths: crank r2 (O2→A), coupler r3 (A→B), rocker r4 (O4→B),
+ *   ground r1 = |O4 − O2| (derived from the pivots).
+ * - The input angle θ2 is the world-frame angle of the crank (O2→A).
  * - The coupler point P is fixed in the coupler's local frame: `u` mm along
- *   A->B and `v` mm perpendicular (CCW-positive). A nonzero `v` is what makes
- *   coupler curves interesting.
+ *   A→B and `v` mm perpendicular (counter-clockwise) to it.
  */
 
-import { circleCircleIntersection } from "./intersections";
 import {
   add,
   angleOf,
+  cross,
   dist,
-  distSq,
-  fromAngle,
+  dist2,
+  fromPolar,
+  norm,
+  normalizeAngle,
   perp,
   scale,
   sub,
-  vec2,
+  TWO_PI,
   type Vec2,
-} from "./vec2";
+} from "./vec";
+import { circleCircleIntersection } from "./geometry";
 
-export interface CouplerPointDef {
-  /** mm along the A->B axis of the coupler. */
+export type BranchSign = 1 | -1;
+
+export interface CouplerPoint {
+  /** mm along the coupler axis A→B */
   u: number;
-  /** mm perpendicular to A->B, CCW-positive. */
+  /** mm perpendicular (CCW) to A→B */
   v: number;
 }
 
 export interface FourBarConfig {
-  /** Ground pivot of the input (crank) link, world mm. */
-  o2: Vec2;
-  /** Ground pivot of the output (rocker) link, world mm. */
-  o4: Vec2;
-  /** r2 — input link length, mm. */
-  crankLen: number;
-  /** r3 — coupler link length, mm. */
-  couplerLen: number;
-  /** r4 — output link length, mm. */
-  rockerLen: number;
-  /** Coupler point in the coupler's local frame. */
-  couplerPoint: CouplerPointDef;
-}
-
-/** Derived ground link length r1, mm. */
-export const groundLen = (config: Pick<FourBarConfig, "o2" | "o4">): number =>
-  dist(config.o2, config.o4);
-
-/** World angle of the ground link (O2 -> O4), radians. */
-export const groundAngle = (config: Pick<FourBarConfig, "o2" | "o4">): number =>
-  angleOf(sub(config.o4, config.o2));
-
-/**
- * Convenience constructor: place O2 at `origin` and O4 at `groundLen` along
- * `groundAngleRad`, mirroring the textbook r1..r4 parameterization.
- */
-export function fourBarFromLengths(params: {
-  groundLen: number;
+  O2: Vec2;
+  O4: Vec2;
   crankLen: number;
   couplerLen: number;
   rockerLen: number;
-  couplerPoint?: CouplerPointDef;
-  origin?: Vec2;
-  groundAngleRad?: number;
-}): FourBarConfig {
-  const origin = params.origin ?? vec2(0, 0);
-  const angle = params.groundAngleRad ?? 0;
-  return {
-    o2: origin,
-    o4: add(origin, scale(fromAngle(angle), params.groundLen)),
-    crankLen: params.crankLen,
-    couplerLen: params.couplerLen,
-    rockerLen: params.rockerLen,
-    couplerPoint: params.couplerPoint ?? { u: 0, v: 0 },
-  };
+  couplerPoint: CouplerPoint;
 }
 
-/**
- * The two circle-circle solutions are the "open" and "crossed" assemblies.
- * `open` places B on the counter-clockwise side of the ray A -> O4,
- * `crossed` on the clockwise side. The solver holds a branch across frames —
- * switching branches mid-rotation is the classic bug that makes linkages
- * visually "snap".
- */
-export type FourBarBranch = "open" | "crossed";
+export const groundLen = (c: FourBarConfig): number => dist(c.O2, c.O4);
 
 export interface FourBarPose {
   ok: true;
-  /** Input angle this pose was solved at, radians. */
   theta2: number;
-  /** Crank pin (end of input link), world mm. */
-  a: Vec2;
-  /** Coupler-rocker pin, world mm. */
-  b: Vec2;
-  /** Coupler point P, world mm. Traces the coupler curve. */
-  p: Vec2;
-  /** Branch this pose actually lies on. */
-  branch: FourBarBranch;
-  /**
-   * Transmission angle: acute angle between coupler and rocker at B,
-   * radians in [0, PI/2]. Near 0 the mechanism binds (force transmission
-   * degrades); ~PI/2 is ideal.
-   */
+  /** crank–coupler joint */
+  A: Vec2;
+  /** coupler–rocker joint */
+  B: Vec2;
+  /** coupler point (traces the coupler curve) */
+  P: Vec2;
+  /** which circle-intersection branch B is on (for continuation) */
+  branch: BranchSign;
+  /** world angle of the coupler A→B */
+  theta3: number;
+  /** world angle of the rocker O4→B */
+  theta4: number;
+  /** interior angle between coupler and rocker at B, in (0, π) */
   transmissionAngle: number;
 }
 
-export type FourBarFailureReason =
-  /** Geometry is fine, but this input angle cannot be reached. */
-  | "unreachable"
-  /** Geometry itself is invalid (non-positive lengths, coincident pivots, non-finite input). */
-  | "degenerate";
-
 export interface FourBarFailure {
   ok: false;
-  reason: FourBarFailureReason;
   theta2: number;
-  /** Crank pin position, still well-defined when only B fails to assemble. */
-  a?: Vec2;
+  reason: "unreachable" | "degenerate";
+  /** crank tip, still well-defined when the dyad can't close */
+  A: Vec2 | null;
+  detail: string;
 }
 
 export type FourBarResult = FourBarPose | FourBarFailure;
 
-export interface FourBarSolveOptions {
+export interface SolveOptions {
   /**
-   * Assembly branch to use when there is no previous pose to continue from.
-   * Default: "open".
-   */
-  branch?: FourBarBranch;
-  /**
-   * Previous B position for branch continuity: the solver picks the
-   * intersection nearest to it (nearest-point continuation) instead of a
-   * fixed formula, so the linkage never snaps between assemblies mid-sweep.
+   * Previous B position for branch continuity (nearest-point continuation).
+   * Preferred over `branch` when both are given — this is what prevents the
+   * assembly from snapping between open/crossed circuits mid-rotation.
    */
   prevB?: Vec2;
+  /** Explicit branch when there is no history: +1 = CCW side of A→O4. */
+  branch?: BranchSign;
 }
 
-const isFiniteVec = (v: Vec2): boolean => Number.isFinite(v.x) && Number.isFinite(v.y);
+const isPositive = (n: number): boolean => Number.isFinite(n) && n > 0;
 
-function validateConfig(config: FourBarConfig): boolean {
-  return (
-    isFiniteVec(config.o2) &&
-    isFiniteVec(config.o4) &&
-    Number.isFinite(config.crankLen) &&
-    Number.isFinite(config.couplerLen) &&
-    Number.isFinite(config.rockerLen) &&
-    Number.isFinite(config.couplerPoint.u) &&
-    Number.isFinite(config.couplerPoint.v) &&
-    config.crankLen > 0 &&
-    config.couplerLen > 0 &&
-    config.rockerLen > 0 &&
-    groundLen(config) > 0
-  );
+export function validateConfig(c: FourBarConfig): string | null {
+  if (!isPositive(c.crankLen)) return "crank length must be positive";
+  if (!isPositive(c.couplerLen)) return "coupler length must be positive";
+  if (!isPositive(c.rockerLen)) return "rocker length must be positive";
+  if (!Number.isFinite(c.O2.x + c.O2.y + c.O4.x + c.O4.y))
+    return "ground pivots must be finite";
+  if (groundLen(c) <= 0) return "ground pivots are coincident";
+  return null;
 }
 
-/** Acute angle between coupler (A->B) and rocker (O4->B) at joint B. */
-function transmissionAngleAt(a: Vec2, b: Vec2, o4: Vec2): number {
-  const coupler = sub(b, a);
-  const rocker = sub(b, o4);
-  const cosMu =
-    (coupler.x * rocker.x + coupler.y * rocker.y) /
-    (Math.hypot(coupler.x, coupler.y) * Math.hypot(rocker.x, rocker.y));
-  const mu = Math.acos(Math.min(1, Math.max(-1, cosMu)));
-  return mu > Math.PI / 2 ? Math.PI - mu : mu;
-}
-
-/** Which branch a solved B lies on, given the two ordered intersections. */
-function branchOf(b: Vec2, points: [Vec2, Vec2]): FourBarBranch {
-  return distSq(b, points[0]) <= distSq(b, points[1]) ? "open" : "crossed";
-}
-
-/**
- * Forward-solve the four-bar at input angle `theta2`.
- *
- * 1. Crank end A = O2 + r2 * (cos theta2, sin theta2).
- * 2. B satisfies |B - A| = r3 and |B - O4| = r4 -> circle-circle intersection.
- * 3. Branch: nearest-point continuation from `opts.prevB` when provided,
- *    otherwise the requested (or default "open") assembly.
- * 4. No intersection -> typed "unreachable" result, never NaN.
- */
+/** Forward-solve the linkage at input angle θ2. Never returns NaN geometry. */
 export function solveFourBar(
   config: FourBarConfig,
   theta2: number,
-  opts: FourBarSolveOptions = {},
+  opts: SolveOptions = {},
 ): FourBarResult {
-  if (!validateConfig(config) || !Number.isFinite(theta2)) {
-    return { ok: false, reason: "degenerate", theta2 };
+  const invalid = validateConfig(config);
+  if (invalid) {
+    return { ok: false, theta2, reason: "degenerate", A: null, detail: invalid };
   }
 
-  const a = add(config.o2, scale(fromAngle(theta2), config.crankLen));
-  const hit = circleCircleIntersection(a, config.couplerLen, config.o4, config.rockerLen);
+  const A = add(config.O2, fromPolar(config.crankLen, theta2));
+  const hit = circleCircleIntersection(A, config.couplerLen, config.O4, config.rockerLen);
 
-  if (hit.type === "separate" || hit.type === "contained") {
-    return { ok: false, reason: "unreachable", theta2, a };
+  if (hit.kind === "none") {
+    return {
+      ok: false,
+      theta2,
+      reason: "unreachable",
+      A,
+      detail:
+        hit.separation === "apart"
+          ? "coupler and rocker cannot reach each other at this crank angle"
+          : "one closure circle is contained in the other at this crank angle",
+    };
   }
-  if (hit.type === "coincident") {
-    // A sits on O4 with r3 == r4: infinitely many assemblies.
-    return { ok: false, reason: "degenerate", theta2, a };
+  if (hit.kind === "coincident") {
+    return {
+      ok: false,
+      theta2,
+      reason: "degenerate",
+      A,
+      detail: "coupler and rocker circles coincide — B is indeterminate",
+    };
   }
 
-  let b: Vec2;
-  let branch: FourBarBranch;
-  if (opts.prevB && isFiniteVec(opts.prevB)) {
-    b =
-      distSq(opts.prevB, hit.points[0]) <= distSq(opts.prevB, hit.points[1])
-        ? hit.points[0]
-        : hit.points[1];
-    branch = branchOf(b, hit.points);
+  let B: Vec2;
+  let branch: BranchSign;
+  if (hit.kind === "tangent") {
+    B = hit.p;
+    branch = opts.branch ?? 1;
+  } else if (opts.prevB) {
+    // Nearest-point continuation: hold the assembly on its current circuit.
+    const d1 = dist2(hit.p1, opts.prevB);
+    const d2 = dist2(hit.p2, opts.prevB);
+    B = d1 <= d2 ? hit.p1 : hit.p2;
+    branch = d1 <= d2 ? 1 : -1;
   } else {
-    branch = opts.branch ?? "open";
-    b = branch === "open" ? hit.points[0] : hit.points[1];
+    branch = opts.branch ?? 1;
+    B = branch === 1 ? hit.p1 : hit.p2;
   }
 
-  // Coupler point P: rigid in the coupler frame (u along A->B, v perpendicular).
-  const axis = scale(sub(b, a), 1 / config.couplerLen);
-  const p = add(a, add(scale(axis, config.couplerPoint.u), scale(perp(axis), config.couplerPoint.v)));
+  // Coupler frame: û along A→B, v̂ = perp(û) (CCW).
+  const uHat = norm(sub(B, A));
+  const vHat = perp(uHat);
+  const P = add(A, add(scale(uHat, config.couplerPoint.u), scale(vHat, config.couplerPoint.v)));
+
+  // Transmission angle: interior angle of triangle A-B-O4 at B.
+  const bToA = sub(A, B);
+  const bToO4 = sub(config.O4, B);
+  const mu = Math.abs(
+    Math.atan2(Math.abs(cross(bToA, bToO4)), bToA.x * bToO4.x + bToA.y * bToO4.y),
+  );
 
   return {
     ok: true,
     theta2,
-    a,
-    b,
-    p,
+    A,
+    B,
+    P,
     branch,
-    transmissionAngle: transmissionAngleAt(a, b, config.o4),
+    theta3: angleOf(sub(B, A)),
+    theta4: angleOf(sub(B, config.O4)),
+    transmissionAngle: mu,
   };
 }
 
@@ -235,223 +182,284 @@ export function solveFourBar(
 // Grashof classification
 // ---------------------------------------------------------------------------
 
-export type FourBarLink = "ground" | "crank" | "coupler" | "rocker";
+export type LinkName = "ground" | "crank" | "coupler" | "rocker";
 
 export type GrashofClass =
-  /** Grashof, shortest link is a side link: that link fully rotates. */
   | "crank-rocker"
-  /** Grashof, shortest link is the ground: both side links fully rotate (drag-link). */
   | "double-crank"
-  /** Grashof, shortest link is the coupler: both side links only rock. */
-  | "grashof-double-rocker"
-  /** s + l == p + q: can change branch through the change point. */
+  | "double-rocker"
   | "change-point"
-  /** Non-Grashof: no link fully rotates; all three moving links rock. */
-  | "triple-rocker"
-  /** One link longer than the other three combined: cannot assemble at all. */
-  | "non-assemblable"
-  /** Non-positive or non-finite lengths. */
-  | "invalid";
+  | "triple-rocker";
 
 export interface GrashofResult {
   class: GrashofClass;
-  /** True when s + l <= p + q (includes the change point). */
-  isGrashof: boolean;
-  shortest: FourBarLink;
-  longest: FourBarLink;
-  /** Links that can rotate fully (360 deg) relative to the ground. */
-  fullyRotating: FourBarLink[];
-  /** Whether the input crank (r2) is a full 360-degree driver. */
+  /** s + l ≤ p + q */
+  grashof: boolean;
+  shortest: LinkName;
+  /** links that can rotate fully relative to the ground frame */
+  fullyRotating: LinkName[];
+  /** whether the input crank (r2) is a full 360° driver */
   inputRotatesFully: boolean;
+  /** human-readable one-liner for the UI badge */
+  description: string;
 }
 
-/** Relative tolerance for the change-point equality test. */
-const GRASHOF_EPS = 1e-9;
-
-export function classifyGrashof(lengths: {
-  groundLen: number;
-  crankLen: number;
-  couplerLen: number;
-  rockerLen: number;
-}): GrashofResult {
-  const entries: Array<{ link: FourBarLink; len: number }> = [
-    { link: "ground", len: lengths.groundLen },
-    { link: "crank", len: lengths.crankLen },
-    { link: "coupler", len: lengths.couplerLen },
-    { link: "rocker", len: lengths.rockerLen },
+export function classifyGrashof(
+  ground: number,
+  crank: number,
+  coupler: number,
+  rocker: number,
+): GrashofResult {
+  const named: Array<[LinkName, number]> = [
+    ["ground", ground],
+    ["crank", crank],
+    ["coupler", coupler],
+    ["rocker", rocker],
   ];
+  const sorted = [...named].sort((a, b) => a[1] - b[1]);
+  const [shortest, s] = sorted[0];
+  const l = sorted[3][1];
+  const pq = sorted[1][1] + sorted[2][1];
+  const tol = 1e-9 * Math.max(1, l);
 
-  const invalid = entries.some((e) => !Number.isFinite(e.len) || e.len <= 0);
-  if (invalid) {
+  if (s + l > pq + tol) {
     return {
-      class: "invalid",
-      isGrashof: false,
-      shortest: "ground",
-      longest: "ground",
+      class: "triple-rocker",
+      grashof: false,
+      shortest,
       fullyRotating: [],
       inputRotatesFully: false,
+      description: "Non-Grashof triple-rocker — no link fully rotates; the input sways between limits",
     };
   }
 
-  const sorted = [...entries].sort((x, y) => x.len - y.len);
-  const [s, p, q, l] = sorted;
-  const scaleRef = l.len;
-
-  if (l.len > s.len + p.len + q.len + scaleRef * GRASHOF_EPS) {
-    return {
-      class: "non-assemblable",
-      isGrashof: false,
-      shortest: s.link,
-      longest: l.link,
-      fullyRotating: [],
-      inputRotatesFully: false,
-    };
-  }
-
-  const excess = s.len + l.len - (p.len + q.len);
-  const changePoint = Math.abs(excess) <= scaleRef * GRASHOF_EPS;
-  const isGrashof = excess <= scaleRef * GRASHOF_EPS;
-
-  let cls: GrashofClass;
-  let fullyRotating: FourBarLink[];
+  const changePoint = Math.abs(s + l - pq) <= tol;
+  // In a Grashof chain the shortest link revolves fully relative to all
+  // others; relative to ground that means:
+  const fullyRotating: LinkName[] =
+    shortest === "ground" ? ["crank", "rocker"] : [shortest];
+  const inputRotatesFully = fullyRotating.includes("crank");
 
   if (changePoint) {
-    cls = "change-point";
-    // At the change point the shortest link can still make full revolutions
-    // (through folded configurations); branch is ambiguous there.
-    fullyRotating = fullRotatorsFor(s.link);
-  } else if (!isGrashof) {
-    cls = "triple-rocker";
-    fullyRotating = [];
-  } else if (s.link === "ground") {
-    cls = "double-crank";
-    fullyRotating = ["crank", "rocker"];
-  } else if (s.link === "coupler") {
-    cls = "grashof-double-rocker";
-    // The coupler makes full revolutions relative to the side links, but
-    // neither side link fully rotates relative to ground.
-    fullyRotating = ["coupler"];
-  } else {
-    cls = "crank-rocker";
-    fullyRotating = [s.link];
+    return {
+      class: "change-point",
+      grashof: true,
+      shortest,
+      fullyRotating,
+      inputRotatesFully,
+      description:
+        "Change-point — links can become collinear; the assembly can flip branch at the fold",
+    };
+  }
+
+  let cls: GrashofClass;
+  let description: string;
+  switch (shortest) {
+    case "ground":
+      cls = "double-crank";
+      description = "Grashof double-crank (drag-link) — both side links fully rotate";
+      break;
+    case "coupler":
+      cls = "double-rocker";
+      description = "Grashof double-rocker — the coupler fully rotates; both side links sway";
+      break;
+    case "crank":
+      cls = "crank-rocker";
+      description = "Grashof crank-rocker — the crank fully rotates, the rocker sways";
+      break;
+    default:
+      cls = "crank-rocker";
+      description =
+        "Grashof rocker-crank — the output link fully rotates; the driven crank sways";
+      break;
   }
 
   return {
     class: cls,
-    isGrashof,
-    shortest: s.link,
-    longest: l.link,
+    grashof: true,
+    shortest,
     fullyRotating,
-    inputRotatesFully: fullyRotating.includes("crank"),
+    inputRotatesFully,
+    description,
   };
 }
 
-function fullRotatorsFor(shortest: FourBarLink): FourBarLink[] {
-  switch (shortest) {
-    case "ground":
-      return ["crank", "rocker"];
-    case "coupler":
-      return ["coupler"];
-    default:
-      return [shortest];
-  }
+export const classify = (c: FourBarConfig): GrashofResult =>
+  classifyGrashof(groundLen(c), c.crankLen, c.couplerLen, c.rockerLen);
+
+// ---------------------------------------------------------------------------
+// Reachable input range
+// ---------------------------------------------------------------------------
+
+/** A CCW arc of input angles, in world frame; start/end normalized to (-π, π]. */
+export interface InputArc {
+  start: number;
+  end: number;
 }
 
-export const classifyFourBar = (config: FourBarConfig): GrashofResult =>
-  classifyGrashof({
-    groundLen: groundLen(config),
-    crankLen: config.crankLen,
-    couplerLen: config.couplerLen,
-    rockerLen: config.rockerLen,
-  });
-
-// ---------------------------------------------------------------------------
-// Valid input range
-// ---------------------------------------------------------------------------
-
-export type FourBarInputRange =
-  /** The input crank can be driven through a full revolution. */
-  | { type: "full" }
-  /**
-   * The input only assembles for angles theta2 with
-   * `minAbs <= |wrapPi(theta2 - groundAngle)| <= maxAbs` (radians).
-   * The reachable set is symmetric about the ground line.
-   */
-  | { type: "limited"; minAbs: number; maxAbs: number }
-  /** No input angle assembles (or the geometry is degenerate). */
-  | { type: "none" };
-
-/** Wrap an angle to (-PI, PI]. */
-export const wrapPi = (angle: number): number => {
-  const tau = 2 * Math.PI;
-  let a = angle % tau;
-  if (a <= -Math.PI) a += tau;
-  else if (a > Math.PI) a -= tau;
-  return a;
-};
+export type InputRange =
+  | { full: true }
+  | {
+      full: false;
+      /**
+       * Reachable θ2 arcs, symmetric about the ground line O2→O4.
+       * Empty when the linkage cannot assemble at any input angle.
+       */
+      arcs: InputArc[];
+    };
 
 /**
- * Compute the reachable theta2 range from the triangle inequality on the
- * A-O4 diagonal: assembly requires |r3 - r4| <= |A - O4| <= r3 + r4.
+ * Where can the crank go? The dyad closes iff |r3 − r4| ≤ |A−O4| ≤ r3 + r4.
+ * With φ the angle between the crank and the ground line O2→O4,
+ * |A−O4|² = r1² + r2² − 2·r1·r2·cos φ is monotonic in φ ∈ [0, π], so the
+ * limits fall out of two acos evaluations.
  */
-export function fourBarInputRange(config: FourBarConfig): FourBarInputRange {
-  if (!validateConfig(config)) return { type: "none" };
-
+export function inputRange(config: FourBarConfig): InputRange {
   const r1 = groundLen(config);
   const r2 = config.crankLen;
   const r3 = config.couplerLen;
   const r4 = config.rockerLen;
 
-  // cos(thetaRel) bounds from d^2 = r1^2 + r2^2 - 2 r1 r2 cos(thetaRel).
-  const cMin = (r1 * r1 + r2 * r2 - (r3 + r4) * (r3 + r4)) / (2 * r1 * r2);
-  const cMax = (r1 * r1 + r2 * r2 - (r3 - r4) * (r3 - r4)) / (2 * r1 * r2);
+  const dMin = Math.abs(r1 - r2);
+  const dMax = r1 + r2;
+  const reachLo = Math.abs(r3 - r4);
+  const reachHi = r3 + r4;
 
-  if (cMin > 1 || cMax < -1 || cMin > cMax) return { type: "none" };
-  if (cMin <= -1 && cMax >= 1) return { type: "full" };
+  // The dyad can never close when even the closest/farthest crank positions
+  // fall outside the reach annulus.
+  if (dMin > reachHi || dMax < reachLo) return { full: false, arcs: [] };
 
-  const minAbs = cMax >= 1 ? 0 : Math.acos(cMax);
-  const maxAbs = cMin <= -1 ? Math.PI : Math.acos(cMin);
-  return { type: "limited", minAbs, maxAbs };
+  const cosAt = (d: number) => (r1 * r1 + r2 * r2 - d * d) / (2 * r1 * r2);
+
+  // φ where |A−O4| = reachHi (upper closure limit)
+  const phiMax = dMax <= reachHi ? Math.PI : Math.acos(Math.max(-1, Math.min(1, cosAt(reachHi))));
+  // φ where |A−O4| = reachLo (lower closure limit)
+  const phiMin = dMin >= reachLo ? 0 : Math.acos(Math.max(-1, Math.min(1, cosAt(reachLo))));
+
+  if (phiMin <= 0 && phiMax >= Math.PI) return { full: true };
+  if (phiMin > phiMax) return { full: false, arcs: [] }; // cannot assemble anywhere
+
+  const gamma = angleOf(sub(config.O4, config.O2));
+  if (phiMin <= 0) {
+    // Single arc straddling the ground line.
+    return {
+      full: false,
+      arcs: [
+        { start: normalizeAngle(gamma - phiMax), end: normalizeAngle(gamma + phiMax) },
+      ],
+    };
+  }
+  // Two arcs, one on each side of the ground line.
+  return {
+    full: false,
+    arcs: [
+      { start: normalizeAngle(gamma + phiMin), end: normalizeAngle(gamma + phiMax) },
+      { start: normalizeAngle(gamma - phiMax), end: normalizeAngle(gamma - phiMin) },
+    ],
+  };
 }
 
-/** Whether a given theta2 lies in the reachable input range. */
-export function isInputAngleReachable(config: FourBarConfig, theta2: number): boolean {
-  const range = fourBarInputRange(config);
-  if (range.type === "full") return true;
-  if (range.type === "none") return false;
-  const rel = Math.abs(wrapPi(theta2 - groundAngle(config)));
-  const eps = 1e-12;
-  return rel >= range.minAbs - eps && rel <= range.maxAbs + eps;
+/** Is θ inside the CCW arc [start, end]? */
+export function angleInArc(theta: number, arc: InputArc): boolean {
+  const t = normalizeAngle(theta);
+  let span = arc.end - arc.start;
+  if (span < 0) span += TWO_PI;
+  let off = t - arc.start;
+  if (off < 0) off += TWO_PI;
+  return off <= span + 1e-12;
+}
+
+/** Clamp θ to the nearest angle inside the reachable range. */
+export function clampToRange(theta: number, range: InputRange): number {
+  if (range.full) return theta;
+  if (range.arcs.length === 0) return theta;
+  for (const arc of range.arcs) {
+    if (angleInArc(theta, arc)) return theta;
+  }
+  // Snap to the nearest arc endpoint by angular distance.
+  const t = normalizeAngle(theta);
+  let best = t;
+  let bestDist = Infinity;
+  for (const arc of range.arcs) {
+    for (const edge of [arc.start, arc.end]) {
+      const d = Math.abs(normalizeAngle(t - edge));
+      if (d < bestDist) {
+        bestDist = d;
+        best = edge;
+      }
+    }
+  }
+  return best;
 }
 
 // ---------------------------------------------------------------------------
-// Coupler curve tracing
+// Coupler curve
 // ---------------------------------------------------------------------------
 
-export interface CouplerCurveSample {
-  theta2: number;
-  result: FourBarResult;
+export interface CouplerCurve {
+  points: Vec2[];
+  /** true when the curve is a closed loop */
+  closed: boolean;
 }
 
 /**
- * Sweep theta2 through a full revolution with branch continuity and return
- * every sample (reachable or not). Unreachable spans stay in the output so
- * callers can render gaps / valid ranges.
+ * Trace the full coupler curve for the current geometry.
+ *
+ * Full-rotation input: sweep θ2 through 360° with nearest-point branch
+ * continuation — one closed loop per branch.
+ *
+ * Limited input (rocker/non-Grashof): sweep the reachable arc on one branch,
+ * then back on the other. At the arc limits the two branch solutions coincide
+ * (the closure circles are tangent), so the out-and-back sweep is itself a
+ * closed loop — that IS the full coupler curve of a swaying linkage.
  */
 export function traceCouplerCurve(
   config: FourBarConfig,
-  opts: { steps?: number; branch?: FourBarBranch; startTheta2?: number } = {},
-): CouplerCurveSample[] {
-  const steps = Math.max(4, Math.floor(opts.steps ?? 360));
-  const start = opts.startTheta2 ?? 0;
-  const samples: CouplerCurveSample[] = [];
-  let prevB: Vec2 | undefined;
+  opts: { branch?: BranchSign; steps?: number; theta2?: number } = {},
+): CouplerCurve {
+  const steps = opts.steps ?? 360;
+  const branch = opts.branch ?? 1;
+  const range = inputRange(config);
+  const points: Vec2[] = [];
 
-  for (let i = 0; i < steps; i++) {
-    const theta2 = start + (2 * Math.PI * i) / steps;
-    const result = solveFourBar(config, theta2, { branch: opts.branch, prevB });
-    if (result.ok) prevB = result.b;
-    samples.push({ theta2, result });
+  if (range.full) {
+    let prevB: Vec2 | undefined;
+    // Seed the branch at the starting angle, then continue by nearness.
+    for (let i = 0; i <= steps; i++) {
+      const theta = (i / steps) * TWO_PI;
+      const res = solveFourBar(config, theta, prevB ? { prevB } : { branch });
+      if (res.ok) {
+        points.push(res.P);
+        prevB = res.B;
+      }
+    }
+    return { points, closed: points.length > 2 };
   }
-  return samples;
+
+  if (range.arcs.length === 0) return { points: [], closed: false };
+
+  // Pick the arc containing the current input angle if given, else the first.
+  const arc =
+    (opts.theta2 !== undefined
+      ? range.arcs.find((a) => angleInArc(opts.theta2!, a))
+      : undefined) ?? range.arcs[0];
+
+  let span = arc.end - arc.start;
+  if (span < 0) span += TWO_PI;
+  const half = Math.max(8, Math.floor(steps / 2));
+
+  // Out on the requested branch…
+  for (let i = 0; i <= half; i++) {
+    const theta = arc.start + (i / half) * span;
+    const res = solveFourBar(config, theta, { branch });
+    if (res.ok) points.push(res.P);
+  }
+  // …and back on the other: the physical continuation through the fold.
+  const other: BranchSign = branch === 1 ? -1 : 1;
+  for (let i = half; i >= 0; i--) {
+    const theta = arc.start + (i / half) * span;
+    const res = solveFourBar(config, theta, { branch: other });
+    if (res.ok) points.push(res.P);
+  }
+  return { points, closed: points.length > 2 };
 }
