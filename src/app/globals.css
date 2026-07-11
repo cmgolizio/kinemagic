@@ -26,8 +26,19 @@
   --grid-major: rgba(141, 194, 238, 0.28);
   --accent: #4fc3f7; /* cyan pencil */
   --accent-ink: #062536; /* text on accent fills */
+  --accent-soft: rgba(79, 195, 247, 0.35);
   --trace: #ffd166; /* coupler-curve highlight */
+  --trace-glow: rgba(255, 209, 102, 0.22);
   --danger: #ff8484;
+  --warn: #ff8484;
+  --ok: #6fe3a5;
+  --ink-faint: rgba(232, 242, 251, 0.45);
+  --grid-axis: rgba(141, 194, 238, 0.5);
+  --link-fill: rgba(232, 242, 251, 0.1);
+  --link-stroke: #d5e8f9;
+  --selection: rgba(79, 195, 247, 0.28);
+  --panel: rgba(14, 48, 80, 0.78);
+  --panel-border: rgba(213, 232, 249, 0.3);
 }
 
 [data-theme="draft"] {
@@ -44,8 +55,19 @@
   --grid-major: rgba(96, 126, 168, 0.34);
   --accent: #b03d24; /* drafting-pencil red */
   --accent-ink: #fff6ef;
+  --accent-soft: rgba(176, 61, 36, 0.3);
   --trace: #8a5a00;
+  --trace-glow: rgba(138, 90, 0, 0.16);
   --danger: #b3261e;
+  --warn: #b3261e;
+  --ok: #1a7f4b;
+  --ink-faint: rgba(38, 40, 43, 0.45);
+  --grid-axis: rgba(96, 126, 168, 0.55);
+  --link-fill: rgba(38, 44, 52, 0.08);
+  --link-stroke: #33383f;
+  --selection: rgba(176, 61, 36, 0.25);
+  --panel: rgba(255, 253, 247, 0.82);
+  --panel-border: rgba(38, 44, 52, 0.28);
 }
 
 @theme inline {
@@ -63,6 +85,11 @@
   --color-accent-ink: var(--accent-ink);
   --color-trace: var(--trace);
   --color-danger: var(--danger);
+  --color-warn: var(--warn);
+  --color-ok: var(--ok);
+  --color-ink-faint: var(--ink-faint);
+  --color-panel: var(--panel);
+  --color-panel-border: var(--panel-border);
   --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-plex-mono), ui-monospace, "SFMono-Regular", monospace;
 }
@@ -71,6 +98,10 @@ body {
   background: var(--ground);
   color: var(--ink);
   font-family: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+input[type="range"] {
+  accent-color: var(--accent);
 }
 
 /*

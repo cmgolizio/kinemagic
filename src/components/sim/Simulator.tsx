@@ -31,7 +31,7 @@ export function Simulator() {
       </div>
 
       <div className="absolute bottom-3 right-80 hidden lg:block">
-        <TitleBlock sheet="001 — four-bar linkage" />
+        <TitleBlock title="four-bar linkage" sheet="001" />
       </div>
     </div>
   );

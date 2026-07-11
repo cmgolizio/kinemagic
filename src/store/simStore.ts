@@ -293,7 +293,16 @@ export const useSimStore = create<SimState>()((set, get) => ({
   fitView: (sizeArg) => {
     const st = get();
     const size = sizeArg ?? st.canvasSize;
-    const pts: Vec2[] = [st.def.O2, st.def.O4, ...st.trace.points];
+    // Include the full crank and rocker sweep circles, not just the current
+    // pose, so the mechanism stays in frame through a complete cycle.
+    const { O2, O4, crankLen, rockerLen } = st.def;
+    const pts: Vec2[] = [
+      vec(O2.x - crankLen, O2.y - crankLen),
+      vec(O2.x + crankLen, O2.y + crankLen),
+      vec(O4.x - rockerLen, O4.y - rockerLen),
+      vec(O4.x + rockerLen, O4.y + rockerLen),
+      ...st.trace.points,
+    ];
     if (st.pose.ok) pts.push(st.pose.A, st.pose.B, st.pose.P);
     let minX = Infinity;
     let minY = Infinity;
