@@ -25,8 +25,8 @@ import {
   sub,
   TWO_PI,
   type Vec2,
-} from "./vec";
-import { circleCircleIntersection } from "./geometry";
+} from "../vec";
+import { circleCircleIntersection } from "../geometry";
 
 export type BranchSign = 1 | -1;
 

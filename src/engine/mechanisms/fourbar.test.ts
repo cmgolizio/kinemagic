@@ -8,7 +8,7 @@ import {
   traceCouplerCurve,
   type FourBarConfig,
 } from "./fourbar";
-import { add, angleOf, dist, fromPolar, sub, TWO_PI, vec, type Vec2 } from "./vec";
+import { add, angleOf, dist, fromPolar, sub, TWO_PI, vec, type Vec2 } from "../vec";
 
 const config = (over: Partial<FourBarConfig> = {}): FourBarConfig => ({
   O2: vec(0, 0),

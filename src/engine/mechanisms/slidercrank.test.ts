@@ -2,10 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   defaultSliderCrank,
   pistonPositionClosedForm,
+  sliderCrankInputRange,
+  sliderStroke,
   solveSliderCrank,
+  traceSliderCrank,
   type SliderCrankConfig,
 } from "./slidercrank";
-import { cross, dist, fromPolar, perp, sub, TWO_PI, vec } from "./vec";
+import { angleInArc } from "./fourbar";
+import { cross, dist, fromPolar, perp, sub, TWO_PI, vec } from "../vec";
 
 describe("solveSliderCrank vs the closed-form piston equation", () => {
   it.each([
@@ -107,5 +111,105 @@ describe("failure modes", () => {
         ).toBe(true);
       }
     }
+  });
+});
+
+describe("rod trace point", () => {
+  it("stays rigid in the rod frame", () => {
+    const cfg: SliderCrankConfig = {
+      ...defaultSliderCrank(),
+      rodPoint: { u: 30, v: 15 },
+    };
+    for (let i = 0; i < 360; i += 10) {
+      const res = solveSliderCrank(cfg, (i / 360) * TWO_PI);
+      if (!res.ok) continue;
+      expect(dist(res.P, res.A)).toBeCloseTo(Math.hypot(30, 15), 9);
+      expect(dist(res.P, res.B)).toBeCloseTo(Math.hypot(cfg.rodLen - 30, 15), 9);
+    }
+  });
+
+  it("defaults to the rod midpoint when unset", () => {
+    const cfg: SliderCrankConfig = { ...defaultSliderCrank(), rodPoint: undefined };
+    const res = solveSliderCrank(cfg, 1.1);
+    if (!res.ok) throw new Error("solve failed");
+    expect(res.P.x).toBeCloseTo((res.A.x + res.B.x) / 2, 9);
+    expect(res.P.y).toBeCloseTo((res.A.y + res.B.y) / 2, 9);
+  });
+
+  it("traces a closed loop over a full-rotation cycle", () => {
+    const t = traceSliderCrank(defaultSliderCrank(), { steps: 240 });
+    expect(t.closed).toBe(true);
+    expect(t.points.length).toBeGreaterThan(200);
+    const first = t.points[0];
+    const last = t.points[t.points.length - 1];
+    expect(dist(first, last)).toBeLessThan(1e-9);
+  });
+});
+
+describe("input range", () => {
+  it("is full when the rod out-reaches crank + |offset|", () => {
+    expect(sliderCrankInputRange(defaultSliderCrank()).full).toBe(true);
+  });
+
+  it("is limited for a short rod: arc interiors solve, gaps fail", () => {
+    const cfg: SliderCrankConfig = {
+      O2: vec(0, 0),
+      crankLen: 50,
+      rodLen: 30,
+      axisAngle: 0,
+      offset: 0,
+    };
+    const range = sliderCrankInputRange(cfg);
+    expect(range.full).toBe(false);
+    if (range.full) return;
+    expect(range.arcs.length).toBe(2);
+    for (const arc of range.arcs) {
+      let span = arc.end - arc.start;
+      if (span < 0) span += TWO_PI;
+      const mid = arc.start + span / 2;
+      expect(solveSliderCrank(cfg, mid).ok).toBe(true);
+      expect(angleInArc(mid, arc)).toBe(true);
+    }
+    // Straight up (crank ⟂ axis) is out of reach for r=50, l=30.
+    expect(solveSliderCrank(cfg, Math.PI / 2).ok).toBe(false);
+  });
+
+  it("returns no arcs when the offset is beyond crank + rod", () => {
+    const cfg: SliderCrankConfig = {
+      O2: vec(0, 0),
+      crankLen: 10,
+      rodLen: 10,
+      axisAngle: 0,
+      offset: 40,
+    };
+    const range = sliderCrankInputRange(cfg);
+    expect(range.full).toBe(false);
+    if (!range.full) expect(range.arcs.length).toBe(0);
+  });
+
+  it("respects the axis rotation", () => {
+    const cfg: SliderCrankConfig = {
+      O2: vec(0, 0),
+      crankLen: 50,
+      rodLen: 30,
+      axisAngle: Math.PI / 4,
+      offset: 0,
+    };
+    const range = sliderCrankInputRange(cfg);
+    expect(range.full).toBe(false);
+    if (range.full) return;
+    // Along the axis is reachable, perpendicular to it is not.
+    expect(solveSliderCrank(cfg, Math.PI / 4).ok).toBe(true);
+    expect(solveSliderCrank(cfg, Math.PI / 4 + Math.PI / 2).ok).toBe(false);
+  });
+});
+
+describe("stroke", () => {
+  it("matches r + l and l − r extremes for the in-line layout", () => {
+    const s = sliderStroke(defaultSliderCrank());
+    expect(s).not.toBeNull();
+    if (!s) return;
+    expect(s.max).toBeCloseTo(120, 6);
+    expect(s.min).toBeCloseTo(60, 6);
   });
 });

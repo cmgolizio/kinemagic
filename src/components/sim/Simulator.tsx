@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { TitleBlock } from "@/components/TitleBlock";
+import { MECHANISMS, mechMeta, useSimStore } from "@/store/simStore";
 import { ControlsPanel } from "./ControlsPanel";
 import { StatusBar } from "./StatusBar";
 
@@ -10,6 +11,19 @@ const SimCanvas = dynamic(
   () => import("./SimCanvas").then((m) => m.SimCanvas),
   { ssr: false },
 );
+
+function SheetStamp() {
+  const type = useSimStore((s) => s.mech.type);
+  const index = MECHANISMS.findIndex((m) => m.type === type);
+  const meta = mechMeta(type);
+  return (
+    <TitleBlock
+      title={meta.label.toLowerCase()}
+      drawingNo={`KM-${String(index + 1).padStart(3, "0")}`}
+      sheet={`${String(index + 1).padStart(3, "0")}`}
+    />
+  );
+}
 
 export function Simulator() {
   return (
@@ -31,7 +45,7 @@ export function Simulator() {
       </div>
 
       <div className="absolute bottom-3 right-80 hidden lg:block">
-        <TitleBlock title="four-bar linkage" sheet="001" />
+        <SheetStamp />
       </div>
     </div>
   );

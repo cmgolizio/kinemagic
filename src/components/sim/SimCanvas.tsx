@@ -2,12 +2,10 @@
 
 import { useEffect, useRef } from "react";
 import { vec, type Vec2 } from "@/engine";
-import { useSimStore, type JointId, type SelectableId } from "@/store/simStore";
+import { draggableIds, useSimStore, type SelectableId } from "@/store/simStore";
 import { readPalette, type Palette } from "./palette";
 import { hitTest, render, type Scene } from "./renderer";
 import { panBy, screenToWorld, zoomAt, type ScreenSize } from "./view";
-
-const DRAGGABLE: ReadonlyArray<SelectableId> = ["O2", "O4", "A", "B", "P", "ground"];
 
 /**
  * The simulation surface. One canvas, one rAF loop: advance the motor,
@@ -69,12 +67,8 @@ export function SimCanvas() {
         view: st.view,
         size,
         palette,
-        def: st.def,
-        pose: st.pose,
-        trace: st.trace,
-        range: st.range,
-        grashof: st.grashof,
-        theta2: st.theta2,
+        mech: st.mech,
+        theta: st.theta,
         hovered: st.hovered,
         selected: st.selected,
       };
@@ -97,7 +91,7 @@ export function SimCanvas() {
     }
     const pointers = new Map<number, PointerInfo>();
     let mode: "idle" | "drag" | "pan" | "pinch" = "idle";
-    let dragId: JointId | "ground" | null = null;
+    let dragId: SelectableId | null = null;
     let resumeAfterDrag = false;
     let lastPan: Vec2 | null = null;
     let lastGroundWorld: Vec2 | null = null;
@@ -109,9 +103,12 @@ export function SimCanvas() {
       return vec(e.clientX - rect.left, e.clientY - rect.top);
     };
 
+    const canDrag = (id: SelectableId | null): boolean =>
+      id !== null && draggableIds(store.getState().mech).includes(id);
+
     const setCursor = (id: SelectableId | null, draggingNow: boolean) => {
       if (draggingNow) canvas.style.cursor = "grabbing";
-      else if (id && DRAGGABLE.includes(id)) canvas.style.cursor = "grab";
+      else if (canDrag(id)) canvas.style.cursor = "grab";
       else if (id) canvas.style.cursor = "pointer";
       else canvas.style.cursor = "default";
     };
@@ -132,20 +129,20 @@ export function SimCanvas() {
       }
 
       const st = store.getState();
-      const hit = hitTest(sceneForHit(), p);
+      const hit = hitTest(scene(), p);
       st.setSelected(hit);
 
-      if (hit && DRAGGABLE.includes(hit)) {
+      if (canDrag(hit)) {
         mode = "drag";
-        dragId = hit as JointId | "ground";
+        dragId = hit;
         st.setDragging(dragId);
-        // Motor fights a θ₂-changing drag; pause and resume after.
+        // Motor fights an input-changing drag; pause and resume after.
         resumeAfterDrag = st.playing;
         if (st.playing) st.setPlaying(false);
         if (dragId === "ground") {
           lastGroundWorld = screenToWorld(st.view, size, p);
-        } else {
-          st.dragTo(dragId as JointId, screenToWorld(st.view, size, p));
+        } else if (dragId) {
+          st.dragTo(dragId, screenToWorld(st.view, size, p));
         }
         setCursor(hit, true);
       } else {
@@ -154,8 +151,6 @@ export function SimCanvas() {
         setCursor(null, false);
       }
     };
-
-    const sceneForHit = (): Scene => scene();
 
     const onPointerMove = (e: PointerEvent) => {
       const p = toLocal(e);
@@ -196,7 +191,7 @@ export function SimCanvas() {
       }
 
       // idle: hover feedback
-      const hit = hitTest(sceneForHit(), p);
+      const hit = hitTest(scene(), p);
       st.setHovered(hit);
       setCursor(hit, false);
     };
@@ -264,7 +259,7 @@ export function SimCanvas() {
     <canvas
       ref={canvasRef}
       className="h-full w-full touch-none select-none"
-      aria-label="Mechanism simulation canvas. Drag joints to reshape the linkage; drag the background to pan; scroll or pinch to zoom."
+      aria-label="Mechanism simulation canvas. Drag joints to reshape the mechanism; drag the background to pan; scroll or pinch to zoom."
     />
   );
 }
