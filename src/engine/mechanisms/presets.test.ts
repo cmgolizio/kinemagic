@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { FOURBAR_PRESETS, fourBarPreset } from "./presets";
+import {
+  CAM_PRESETS,
+  FOURBAR_PRESETS,
+  fourBarPreset,
+  GEAR_PRESETS,
+  GENEVA_PRESETS,
+  mechanismPreset,
+  SLIDERCRANK_PRESETS,
+} from "./presets";
 import {
   classify,
   inputRange,
@@ -7,6 +15,10 @@ import {
   traceCouplerCurve,
   validateConfig,
 } from "./fourbar";
+import { sliderCrankInputRange, validateSliderCrank } from "./slidercrank";
+import { validateCam } from "./cam";
+import { solveGearTrain, validateGearTrain } from "./gears";
+import { validateGeneva } from "./geneva";
 import { fitLine } from "./straightline";
 import { type Vec2 } from "../vec";
 
@@ -103,5 +115,60 @@ describe("four-bar preset drawer", () => {
     expect(longestFlatRun(t.points, 1.5)).toBeGreaterThan(60);
     const whole = fitLine(t.points);
     expect(whole && whole.maxDev).toBeGreaterThan(15);
+  });
+});
+
+describe("mechanism library presets", () => {
+  it("slider-crank presets validate and can reach their starting angle", () => {
+    expect(SLIDERCRANK_PRESETS.length).toBeGreaterThanOrEqual(3);
+    for (const p of SLIDERCRANK_PRESETS) {
+      expect(validateSliderCrank(p.config), p.id).toBeNull();
+      const range = sliderCrankInputRange(p.config);
+      expect(range.full || range.arcs.length > 0, p.id).toBe(true);
+    }
+  });
+
+  it("quick-return preset actually has an offset; engine preset is in-line", () => {
+    expect(mechanismPreset(SLIDERCRANK_PRESETS, "quick-return")!.config.offset).not.toBe(0);
+    expect(mechanismPreset(SLIDERCRANK_PRESETS, "engine")!.config.offset).toBe(0);
+  });
+
+  it("cam presets validate; the harsh preset really is the uniform law", () => {
+    expect(CAM_PRESETS.length).toBeGreaterThanOrEqual(3);
+    for (const p of CAM_PRESETS) {
+      expect(validateCam(p.config), p.id).toBeNull();
+    }
+    expect(mechanismPreset(CAM_PRESETS, "uniform-jolt")!.config.law).toBe("uniform");
+    expect(mechanismPreset(CAM_PRESETS, "eccentric")!.config.kind).toBe("eccentric");
+  });
+
+  it("gear presets validate and deliver the advertised ratios", () => {
+    expect(GEAR_PRESETS.length).toBeGreaterThanOrEqual(3);
+    for (const p of GEAR_PRESETS) {
+      expect(validateGearTrain(p.config), p.id).toBeNull();
+    }
+    const ratio = (id: string) => {
+      const res = solveGearTrain(mechanismPreset(GEAR_PRESETS, id)!.config, 0);
+      if (!res.ok) throw new Error(`${id} must solve`);
+      return res.overallRatio;
+    };
+    expect(ratio("reduction")).toBeCloseTo(-12 / 30, 10);
+    expect(ratio("idler")).toBeCloseTo(1, 10);
+    expect(ratio("speed-up")).toBeCloseTo(-3, 10);
+  });
+
+  it("geneva presets validate with the advertised slot counts", () => {
+    expect(GENEVA_PRESETS.length).toBeGreaterThanOrEqual(3);
+    for (const p of GENEVA_PRESETS) {
+      expect(validateGeneva(p.config), p.id).toBeNull();
+    }
+    expect(mechanismPreset(GENEVA_PRESETS, "film")!.config.slots).toBe(4);
+  });
+
+  it("preset ids are unique within each list", () => {
+    for (const list of [SLIDERCRANK_PRESETS, CAM_PRESETS, GEAR_PRESETS, GENEVA_PRESETS]) {
+      const ids = list.map((p) => p.id);
+      expect(new Set(ids).size).toBe(ids.length);
+    }
   });
 });

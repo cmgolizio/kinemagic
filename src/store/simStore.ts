@@ -18,18 +18,31 @@ import {
   degToRad,
   dist,
   dot,
+  CAM_PRESETS,
   fitLine,
   fourBarPreset,
   fromPolar,
+  GEAR_PRESETS,
+  GENEVA_PRESETS,
   genevaGeometry,
+  groundLen,
   inputRange,
+  mechanismPreset,
   norm,
   normalizeAngle,
   normalizeAnglePositive,
   peaucellierInputRange,
   peaucellierLine,
   perp,
+  randomCam,
+  randomFourBar,
+  randomGearTrain,
+  randomGeneva,
+  randomPeaucellier,
+  randomSliderCrank,
+  randomWatt,
   scale,
+  SLIDERCRANK_PRESETS,
   sliderCrankInputRange,
   sliderStroke,
   solveCam,
@@ -474,6 +487,118 @@ function flipBranch(mech: MechSlice): MechSlice {
   }
 }
 
+/**
+ * Joints the measure tool can pick, with live world positions and display
+ * labels. Everything here is also hit-testable on the canvas.
+ */
+export interface MeasurableJoint {
+  id: SelectableId;
+  label: string;
+  w: Vec2;
+}
+
+export function measurableJoints(mech: MechSlice): MeasurableJoint[] {
+  switch (mech.type) {
+    case "fourbar": {
+      const out: MeasurableJoint[] = [
+        { id: "O2", label: "O₂", w: mech.config.O2 },
+        { id: "O4", label: "O₄", w: mech.config.O4 },
+      ];
+      if (mech.pose.ok) {
+        out.push(
+          { id: "A", label: "A", w: mech.pose.A },
+          { id: "B", label: "B", w: mech.pose.B },
+          { id: "P", label: "P", w: mech.pose.P },
+        );
+      }
+      return out;
+    }
+    case "slidercrank": {
+      const out: MeasurableJoint[] = [{ id: "O2", label: "O₂", w: mech.config.O2 }];
+      if (mech.pose.ok) {
+        out.push(
+          { id: "A", label: "A", w: mech.pose.A },
+          { id: "B", label: "B", w: mech.pose.B },
+          { id: "P", label: "P", w: mech.pose.P },
+        );
+      }
+      return out;
+    }
+    case "cam": {
+      const out: MeasurableJoint[] = [
+        { id: "center", label: "axis", w: mech.config.center },
+      ];
+      if (mech.pose.ok) out.push({ id: "follower", label: "follower", w: mech.pose.follower });
+      return out;
+    }
+    case "gears": {
+      if (!mech.pose.ok) return [{ id: "center", label: "G1", w: mech.config.center }];
+      return mech.pose.gears.map((g, i) => ({
+        id: i === 0 ? "center" : `gear${i}`,
+        label: `G${i + 1}`,
+        w: g.center,
+      }));
+    }
+    case "geneva":
+      return [
+        { id: "center", label: "driver", w: mech.geom.driverCenter },
+        { id: "wheel", label: "wheel", w: mech.geom.wheelCenter },
+      ];
+    case "straightline": {
+      if (mech.variant === "watt") {
+        const out: MeasurableJoint[] = [
+          { id: "O2", label: "O₂", w: mech.watt.O2 },
+          { id: "O4", label: "O₄", w: mech.watt.O4 },
+        ];
+        if (mech.wattPose?.ok) {
+          out.push(
+            { id: "A", label: "A", w: mech.wattPose.A },
+            { id: "B", label: "B", w: mech.wattPose.B },
+            { id: "P", label: "P", w: mech.wattPose.P },
+          );
+        }
+        return out;
+      }
+      const out: MeasurableJoint[] = [{ id: "O", label: "O", w: mech.peaucellier.O }];
+      if (mech.peauPose?.ok) {
+        out.push(
+          { id: "C", label: "C", w: mech.peauPose.C },
+          { id: "P", label: "P", w: mech.peauPose.P },
+          { id: "Q", label: "Q", w: mech.peauPose.Q },
+          { id: "armA", label: "arm A", w: mech.peauPose.armA },
+          { id: "armB", label: "arm B", w: mech.peauPose.armB },
+        );
+      }
+      return out;
+    }
+  }
+}
+
+/** The traced curve of the active mechanism, when it has one. */
+export const sliceTrace = (mech: MechSlice): CouplerCurve | null =>
+  mech.type === "fourbar" || mech.type === "slidercrank" || mech.type === "straightline"
+    ? mech.trace
+    : null;
+
+/** Axis-aligned bounds of the traced curve, mm. */
+export function traceBounds(
+  mech: MechSlice,
+): { min: Vec2; max: Vec2 } | null {
+  const trace = sliceTrace(mech);
+  if (!trace || trace.points.length < 2) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of trace.points) {
+    if (p.x < minX) minX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y > maxY) maxY = p.y;
+  }
+  return { min: vec(minX, minY), max: vec(maxX, maxY) };
+}
+
 /** Joints the pointer can grab, per mechanism. */
 export function draggableIds(mech: MechSlice): SelectableId[] {
   switch (mech.type) {
@@ -578,6 +703,20 @@ interface SavedMech {
   theta: number;
 }
 
+export interface MeasureState {
+  /** measure mode: canvas clicks pick joints instead of dragging them */
+  active: boolean;
+  a: SelectableId | null;
+  b: SelectableId | null;
+}
+
+export interface GhostCurve {
+  points: Vec2[];
+  closed: boolean;
+  /** mechanism the curve was pinned from, for the panel caption */
+  from: string;
+}
+
 export interface SimState {
   mech: MechSlice;
   /** input angle of the active mechanism (radians, world frame) */
@@ -596,10 +735,30 @@ export interface SimState {
   dragging: SelectableId | null;
   /** parked state of inactive mechanisms, restored when switching back */
   saved: Partial<Record<MechType, SavedMech>>;
+  /** two-joint dimension tool */
+  measure: MeasureState;
+  /** draw the traced curve's bounding box on the canvas */
+  showCurveBox: boolean;
+  /** pinned coupler curve for before/after comparison */
+  ghost: GhostCurve | null;
 
   setMechType(type: MechType): void;
   setStraightVariant(variant: StraightLineVariant): void;
   applyFourBarPreset(id: string): void;
+  /** apply a curated preset of the active mechanism type */
+  applyPreset(id: string): void;
+  /** replace the active mechanism with random valid geometry */
+  randomize(): void;
+  setMeasureActive(active: boolean): void;
+  /** measure-mode click: first pick sets A, second sets B, third restarts */
+  pickMeasureJoint(id: SelectableId): void;
+  clearMeasure(): void;
+  setShowCurveBox(show: boolean): void;
+  /** pin the current traced curve as a ghost overlay */
+  pinGhost(): void;
+  clearGhost(): void;
+  /** rotate the ground link about O2 (four-bar / Watt) */
+  setGroundAngle(angle: number): void;
   setPlaying(playing: boolean): void;
   setSpeed(speed: number): void;
   /** scrub the input angle (radians, world frame) */
@@ -643,6 +802,9 @@ export const useSimStore = create<SimState>()((set, get) => ({
   hovered: null,
   dragging: null,
   saved: {},
+  measure: { active: false, a: null, b: null },
+  showCurveBox: false,
+  ghost: null,
 
   setMechType: (type) => {
     const st = get();
@@ -663,6 +825,9 @@ export const useSimStore = create<SimState>()((set, get) => ({
       selected: null,
       hovered: null,
       dragging: null,
+      // Joint ids and world context change with the mechanism.
+      measure: { active: false, a: null, b: null },
+      ghost: null,
     });
     get().fitView();
   },
@@ -679,7 +844,14 @@ export const useSimStore = create<SimState>()((set, get) => ({
       null,
       1,
     );
-    set({ mech: next.mech, theta: next.theta, driveDir: 1, selected: null });
+    set({
+      mech: next.mech,
+      theta: next.theta,
+      driveDir: 1,
+      selected: null,
+      // Watt and Peaucellier expose different joint ids.
+      measure: { active: false, a: null, b: null },
+    });
     get().fitView();
   },
 
@@ -690,6 +862,135 @@ export const useSimStore = create<SimState>()((set, get) => ({
     const next = deriveFourBar(preset.config, preset.theta2, null, preset.branch);
     set({ mech: next.mech, theta: next.theta, driveDir: 1 });
     get().fitView();
+  },
+
+  applyPreset: (id) => {
+    const st = get();
+    switch (st.mech.type) {
+      case "fourbar":
+        get().applyFourBarPreset(id);
+        return;
+      case "slidercrank": {
+        const p = mechanismPreset(SLIDERCRANK_PRESETS, id);
+        if (!p) return;
+        set({ ...deriveSliderCrank(p.config, p.theta, 1), driveDir: 1 });
+        break;
+      }
+      case "cam": {
+        const p = mechanismPreset(CAM_PRESETS, id);
+        if (!p) return;
+        set({ ...deriveCam(p.config, p.theta), driveDir: 1 });
+        break;
+      }
+      case "gears": {
+        const p = mechanismPreset(GEAR_PRESETS, id);
+        if (!p) return;
+        set({ ...deriveGears(p.config, p.theta), driveDir: 1 });
+        break;
+      }
+      case "geneva": {
+        const p = mechanismPreset(GENEVA_PRESETS, id);
+        if (!p) return;
+        set({ ...deriveGeneva(p.config, p.theta), driveDir: 1 });
+        break;
+      }
+      case "straightline":
+        // The Watt/Peaucellier variants are this type's presets.
+        return;
+    }
+    get().fitView();
+  },
+
+  randomize: () => {
+    const st = get();
+    switch (st.mech.type) {
+      case "fourbar": {
+        const r = randomFourBar();
+        set({ ...deriveFourBar(r.config, r.theta2, null, r.branch), driveDir: 1 });
+        break;
+      }
+      case "slidercrank":
+        set({ ...deriveSliderCrank(randomSliderCrank(), st.theta, 1), driveDir: 1 });
+        break;
+      case "cam":
+        set(deriveCam(randomCam(), st.theta));
+        break;
+      case "gears":
+        set(deriveGears(randomGearTrain(), st.theta));
+        break;
+      case "geneva":
+        set(deriveGeneva(randomGeneva(), st.theta));
+        break;
+      case "straightline": {
+        const mech = st.mech;
+        const next =
+          mech.variant === "watt"
+            ? deriveStraightLine(
+                "watt",
+                randomWatt(),
+                mech.peaucellier,
+                degToRad(16),
+                null,
+                1,
+              )
+            : deriveStraightLine(
+                "peaucellier",
+                mech.watt,
+                randomPeaucellier(),
+                degToRad(150),
+                null,
+                1,
+              );
+        set({ ...next, driveDir: 1 });
+        break;
+      }
+    }
+    get().fitView();
+  },
+
+  setMeasureActive: (active) =>
+    set((st) => ({ measure: { ...st.measure, active } })),
+
+  pickMeasureJoint: (id) => {
+    const m = get().measure;
+    if (m.a === null || m.b !== null) {
+      set({ measure: { ...m, a: id, b: null } });
+    } else if (id !== m.a) {
+      set({ measure: { ...m, b: id } });
+    }
+  },
+
+  clearMeasure: () => set({ measure: { active: false, a: null, b: null } }),
+
+  setShowCurveBox: (showCurveBox) => set({ showCurveBox }),
+
+  pinGhost: () => {
+    const st = get();
+    const trace = sliceTrace(st.mech);
+    if (!trace || trace.points.length < 2) return;
+    set({
+      ghost: {
+        points: trace.points,
+        closed: trace.closed,
+        from: mechMeta(st.mech.type).label,
+      },
+    });
+  },
+
+  clearGhost: () => set({ ghost: null }),
+
+  setGroundAngle: (angle) => {
+    const st = get();
+    const config =
+      st.mech.type === "fourbar"
+        ? st.mech.config
+        : st.mech.type === "straightline" && st.mech.variant === "watt"
+          ? st.mech.watt
+          : null;
+    if (!config) return;
+    const O4 = add(config.O2, fromPolar(groundLen(config), angle));
+    if (st.mech.type === "fourbar") get().patchFourBar({ O4 });
+    else get().patchWatt({ O4 });
   },
 
   setPlaying: (playing) => set({ playing }),

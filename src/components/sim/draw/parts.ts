@@ -264,6 +264,26 @@ export function drawTrace(
   ctx.stroke();
 }
 
+/** A pinned "before" curve: dashed, no glow, drawn under the live trace. */
+export function drawGhostTrace(
+  ctx: CanvasRenderingContext2D,
+  env: DrawEnv,
+  points: Vec2[],
+  closed: boolean,
+): void {
+  if (points.length < 2) return;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  tracePath(ctx, env, points, closed);
+  ctx.setLineDash([6, 5]);
+  ctx.strokeStyle = env.palette.inkMuted;
+  ctx.globalAlpha = 0.75;
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 1;
+}
+
 // ---------------------------------------------------------------------------
 // Input range guide (reachable / unreachable arcs on the drive circle)
 // ---------------------------------------------------------------------------

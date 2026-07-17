@@ -2,7 +2,12 @@
 
 import { useEffect, useRef } from "react";
 import { vec, type Vec2 } from "@/engine";
-import { draggableIds, useSimStore, type SelectableId } from "@/store/simStore";
+import {
+  draggableIds,
+  measurableJoints,
+  useSimStore,
+  type SelectableId,
+} from "@/store/simStore";
 import { readPalette, type Palette } from "./palette";
 import { hitTest, render, type Scene } from "./renderer";
 import { panBy, screenToWorld, zoomAt, type ScreenSize } from "./view";
@@ -71,6 +76,9 @@ export function SimCanvas() {
         theta: st.theta,
         hovered: st.hovered,
         selected: st.selected,
+        measure: st.measure,
+        ghost: st.ghost,
+        showCurveBox: st.showCurveBox,
       };
     };
 
@@ -106,8 +114,15 @@ export function SimCanvas() {
     const canDrag = (id: SelectableId | null): boolean =>
       id !== null && draggableIds(store.getState().mech).includes(id);
 
+    const canMeasure = (id: SelectableId | null): boolean =>
+      id !== null &&
+      measurableJoints(store.getState().mech).some((j) => j.id === id);
+
+    const measureMode = (): boolean => store.getState().measure.active;
+
     const setCursor = (id: SelectableId | null, draggingNow: boolean) => {
-      if (draggingNow) canvas.style.cursor = "grabbing";
+      if (measureMode()) canvas.style.cursor = "crosshair";
+      else if (draggingNow) canvas.style.cursor = "grabbing";
       else if (canDrag(id)) canvas.style.cursor = "grab";
       else if (id) canvas.style.cursor = "pointer";
       else canvas.style.cursor = "default";
@@ -131,6 +146,13 @@ export function SimCanvas() {
       const st = store.getState();
       const hit = hitTest(scene(), p);
       st.setSelected(hit);
+
+      // Measure mode: clicks on joints pick dimension endpoints, never drag.
+      if (st.measure.active && canMeasure(hit)) {
+        st.pickMeasureJoint(hit!);
+        mode = "idle";
+        return;
+      }
 
       if (canDrag(hit)) {
         mode = "drag";

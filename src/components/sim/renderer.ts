@@ -4,11 +4,17 @@
  * shared; everything mechanism-specific dispatches to draw/<type>.
  */
 
-import { TWO_PI, type Vec2 } from "@/engine";
-import type { MechSlice } from "@/store/simStore";
+import { dist, TWO_PI, type Vec2 } from "@/engine";
+import {
+  measurableJoints,
+  traceBounds,
+  type GhostCurve,
+  type MeasureState,
+  type MechSlice,
+} from "@/store/simStore";
 import { MONO_FONT, type Palette } from "./palette";
 import type { ScreenSize, ViewState } from "./view";
-import type { DrawEnv } from "./draw/parts";
+import { drawDimension, drawGhostTrace, w2s, type DrawEnv } from "./draw/parts";
 import { drawFourBarHover, drawFourBarMech, hitFourBar } from "./draw/fourbar";
 import {
   drawSliderCrank,
@@ -32,6 +38,9 @@ export interface Scene {
   theta: number;
   hovered: string | null;
   selected: string | null;
+  measure: MeasureState;
+  ghost: GhostCurve | null;
+  showCurveBox: boolean;
 }
 
 const env = (scene: Scene): DrawEnv => ({
@@ -49,6 +58,10 @@ export function render(ctx: CanvasRenderingContext2D, scene: Scene): void {
 
   const e = env(scene);
   const mech = scene.mech;
+
+  // Pinned comparison curve sits under the live drawing.
+  if (scene.ghost) drawGhostTrace(ctx, e, scene.ghost.points, scene.ghost.closed);
+
   switch (mech.type) {
     case "fourbar":
       drawFourBarMech(ctx, e, mech.config, mech.pose, mech.trace, mech.range);
@@ -75,6 +88,89 @@ export function render(ctx: CanvasRenderingContext2D, scene: Scene): void {
       drawStraightLineHover(ctx, e, mech);
       break;
   }
+
+  if (scene.showCurveBox) drawCurveBox(ctx, e, mech);
+  drawMeasure(ctx, e, mech, scene.measure);
+}
+
+// ---------------------------------------------------------------------------
+// Measure tool & curve bounding box
+// ---------------------------------------------------------------------------
+
+function drawMeasure(
+  ctx: CanvasRenderingContext2D,
+  e: DrawEnv,
+  mech: MechSlice,
+  measure: MeasureState,
+): void {
+  if (!measure.a && !measure.active) return;
+  const joints = measurableJoints(mech);
+  const find = (id: string | null) => joints.find((j) => j.id === id);
+  const a = find(measure.a);
+  const b = find(measure.b);
+
+  // Rings on the picked joints so the pair reads at a glance.
+  for (const j of [a, b]) {
+    if (!j) continue;
+    const p = w2s(e, j.w);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 10, 0, TWO_PI);
+    ctx.strokeStyle = e.palette.accent;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([3, 3]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  if (a && b) {
+    drawDimension(
+      ctx,
+      e,
+      a.w,
+      b.w,
+      `${a.label}–${b.label} ${dist(a.w, b.w).toFixed(1)} mm`,
+    );
+  } else if (measure.active) {
+    // Prompt while the pair is incomplete.
+    ctx.font = `11px ${MONO_FONT}`;
+    ctx.fillStyle = e.palette.inkMuted;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    ctx.fillText(
+      a ? `${a.label} picked — click a second joint` : "measure: click a joint",
+      e.size.w / 2,
+      10,
+    );
+  }
+}
+
+function drawCurveBox(
+  ctx: CanvasRenderingContext2D,
+  e: DrawEnv,
+  mech: MechSlice,
+): void {
+  const bounds = traceBounds(mech);
+  if (!bounds) return;
+  const tl = w2s(e, { x: bounds.min.x, y: bounds.max.y });
+  const br = w2s(e, { x: bounds.max.x, y: bounds.min.y });
+  const w = bounds.max.x - bounds.min.x;
+  const h = bounds.max.y - bounds.min.y;
+
+  ctx.setLineDash([5, 4]);
+  ctx.strokeStyle = e.palette.inkMuted;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+  ctx.setLineDash([]);
+
+  ctx.font = `10px ${MONO_FONT}`;
+  ctx.fillStyle = e.palette.inkMuted;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "bottom";
+  ctx.fillText(
+    `${w.toFixed(1)} × ${h.toFixed(1)} mm`,
+    (tl.x + br.x) / 2,
+    tl.y - 4,
+  );
 }
 
 /** Topmost interactive element at a screen point. */

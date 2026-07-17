@@ -1,13 +1,21 @@
 "use client";
 
 import {
+  angleOf,
+  CAM_PRESETS,
+  classify,
   degToRad,
   FOURBAR_PRESETS,
+  GEAR_PRESETS,
+  GENEVA_PRESETS,
   genevaDwellFraction,
   groundLen,
   normalizeAnglePositive,
   radToDeg,
+  SLIDERCRANK_PRESETS,
+  sub,
   type CamConfig,
+  type GrashofResult,
   type MotionLaw,
 } from "@/engine";
 import { Panel } from "@/components/ui/Panel";
@@ -18,6 +26,9 @@ import {
   useSimStore,
   type MechType,
 } from "@/store/simStore";
+import { AnalysisPanel } from "./AnalysisPanel";
+import { ComparePanel } from "./ComparePanel";
+import { MeasurePanel } from "./MeasurePanel";
 
 // ---------------------------------------------------------------------------
 // Small shared pieces
@@ -62,15 +73,31 @@ function Note({ children }: { children: React.ReactNode }) {
 }
 
 // ---------------------------------------------------------------------------
-// Mechanism picker + presets
+// Mechanism picker + presets + randomize
 // ---------------------------------------------------------------------------
+
+interface PresetEntry {
+  id: string;
+  label: string;
+  blurb: string;
+}
+
+const PRESET_LISTS: Partial<Record<MechType, PresetEntry[]>> = {
+  fourbar: FOURBAR_PRESETS,
+  slidercrank: SLIDERCRANK_PRESETS,
+  cam: CAM_PRESETS,
+  gears: GEAR_PRESETS,
+  geneva: GENEVA_PRESETS,
+};
 
 function MechanismPicker() {
   const mech = useSimStore((s) => s.mech);
   const setMechType = useSimStore((s) => s.setMechType);
   const setStraightVariant = useSimStore((s) => s.setStraightVariant);
-  const applyFourBarPreset = useSimStore((s) => s.applyFourBarPreset);
+  const applyPreset = useSimStore((s) => s.applyPreset);
+  const randomize = useSimStore((s) => s.randomize);
   const meta = mechMeta(mech.type);
+  const presets = PRESET_LISTS[mech.type];
 
   return (
     <Panel title="Mechanism">
@@ -88,18 +115,18 @@ function MechanismPicker() {
       </select>
       <Note>{meta.blurb}</Note>
 
-      {mech.type === "fourbar" && (
+      {presets && (
         <div className="flex flex-col gap-1">
           <span className="font-mono text-[10px] uppercase tracking-wider text-ink-muted">
-            Famous curves
+            {mech.type === "fourbar" ? "Famous curves" : "Presets"}
           </span>
           <div className="grid grid-cols-2 gap-1">
-            {FOURBAR_PRESETS.map((p) => (
+            {presets.map((p) => (
               <button
                 key={p.id}
                 type="button"
                 title={p.blurb}
-                onClick={() => applyFourBarPreset(p.id)}
+                onClick={() => applyPreset(p.id)}
                 className="border border-panel-border px-1.5 py-1 font-mono text-[10px] uppercase tracking-wider text-ink-muted transition-colors hover:border-accent hover:text-accent"
               >
                 {p.label}
@@ -120,6 +147,15 @@ function MechanismPicker() {
           onSelect={setStraightVariant}
         />
       )}
+
+      <button
+        type="button"
+        onClick={randomize}
+        title="Replace the geometry with random values — always assemblable, never junk"
+        className="border border-panel-border px-1.5 py-1 font-mono text-[10px] uppercase tracking-wider text-ink-muted transition-colors hover:border-accent hover:text-accent"
+      >
+        ⚄ randomize (valid)
+      </button>
     </Panel>
   );
 }
@@ -237,21 +273,64 @@ function DrivePanel() {
 // Per-mechanism geometry panels
 // ---------------------------------------------------------------------------
 
+/** Live Grashof status dot + class, shown on the Links panel header. */
+function GrashofBadge({
+  grashof,
+  impossible,
+}: {
+  grashof: GrashofResult;
+  impossible: boolean;
+}) {
+  const color = impossible
+    ? "var(--warn)"
+    : grashof.inputRotatesFully
+      ? "var(--ok)"
+      : "var(--trace)";
+  return (
+    <span
+      title={grashof.description}
+      className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-ink-muted"
+    >
+      <span
+        aria-hidden
+        className="inline-block h-2 w-2 rounded-full"
+        style={{ background: color }}
+      />
+      {impossible ? "no assembly" : grashof.class}
+    </span>
+  );
+}
+
 function FourBarControls() {
   const mech = useSimStore((s) => s.mech);
   const patchFourBar = useSimStore((s) => s.patchFourBar);
   const setGroundLen = useSimStore((s) => s.setGroundLen);
+  const setGroundAngle = useSimStore((s) => s.setGroundAngle);
   const setCouplerPoint = useSimStore((s) => s.setCouplerPoint);
   if (mech.type !== "fourbar") return null;
   const def = mech.config;
+  const impossible = !mech.range.full && mech.range.arcs.length === 0;
 
   return (
     <>
-      <Panel title="Links">
+      <Panel
+        title="Links"
+        badge={<GrashofBadge grashof={mech.grashof} impossible={impossible} />}
+      >
         <Slider label="crank r₂" value={def.crankLen} min={2} max={150} onChange={(v) => patchFourBar({ crankLen: v })} />
         <Slider label="coupler r₃" value={def.couplerLen} min={2} max={250} onChange={(v) => patchFourBar({ couplerLen: v })} />
         <Slider label="rocker r₄" value={def.rockerLen} min={2} max={250} onChange={(v) => patchFourBar({ rockerLen: v })} />
         <Slider label="ground r₁" value={groundLen(def)} min={2} max={250} onChange={setGroundLen} />
+        <Slider
+          label="ground angle"
+          value={radToDeg(angleOf(sub(def.O4, def.O2)))}
+          min={-180}
+          max={180}
+          step={1}
+          unit="°"
+          precision={0}
+          onChange={(v) => setGroundAngle(degToRad(v))}
+        />
         <Note>{mech.grashof.description}</Note>
       </Panel>
       <Panel title="Coupler point">
@@ -442,9 +521,23 @@ function GearsControls() {
           }}
         />
       ))}
+      <Slider
+        label="mesh angle 1"
+        value={radToDeg(c.meshAngles[0] ?? 0)}
+        min={-90}
+        max={90}
+        step={1}
+        unit="°"
+        precision={0}
+        onChange={(v) => {
+          const meshAngles = [...c.meshAngles];
+          meshAngles[0] = degToRad(v);
+          patch({ meshAngles });
+        }}
+      />
       {c.teeth.length === 3 && (
         <Slider
-          label="2nd mesh angle"
+          label="mesh angle 2"
           value={radToDeg(c.meshAngles[1] ?? 0)}
           min={-90}
           max={90}
@@ -488,6 +581,16 @@ function GenevaControls() {
         onChange={(v) => patch({ slots: Math.round(v) })}
       />
       <Slider label="center distance" value={c.centerDist} min={40} max={160} onChange={(v) => patch({ centerDist: v })} />
+      <Slider
+        label="wheel direction"
+        value={radToDeg(c.wheelDir)}
+        min={-180}
+        max={180}
+        step={1}
+        unit="°"
+        precision={0}
+        onChange={(v) => patch({ wheelDir: degToRad(v) })}
+      />
       <Note>
         Each driver revolution indexes the wheel {`${(360 / c.slots).toFixed(0)}°`};
         it rests {(genevaDwellFraction(c.slots) * 100).toFixed(0)}% of the time.
@@ -507,13 +610,18 @@ function StraightLineControls() {
 
   if (mech.variant === "watt") {
     const def = mech.watt;
+    const impossible = !mech.range.full && mech.range.arcs.length === 0;
     return (
-      <Panel title="Links (Watt)">
+      <Panel
+        title="Links (Watt)"
+        badge={<GrashofBadge grashof={classify(def)} impossible={impossible} />}
+      >
         <Slider label="side link r₂" value={def.crankLen} min={10} max={200} onChange={(v) => patchWatt({ crankLen: v })} />
         <Slider label="coupler r₃" value={def.couplerLen} min={5} max={150} onChange={(v) => patchWatt({ couplerLen: v })} />
         <Slider label="side link r₄" value={def.rockerLen} min={10} max={200} onChange={(v) => patchWatt({ rockerLen: v })} />
         <Slider label="ground r₁" value={groundLen(def)} min={10} max={300} onChange={setGroundLen} />
         <Slider label="trace u" value={def.couplerPoint.u} min={-50} max={150} onChange={(v) => setCouplerPoint(v, def.couplerPoint.v)} />
+        <Slider label="trace v" value={def.couplerPoint.v} min={-60} max={60} onChange={(v) => setCouplerPoint(def.couplerPoint.u, v)} />
         <Note>
           Keep the trace point at the coupler midpoint (u = r₃/2, v = 0) for the
           classic straight stroke; the drive sways between its limits.
@@ -533,6 +641,16 @@ function StraightLineControls() {
         min={10}
         max={Math.max(12, c.armLen - 5)}
         onChange={(v) => patchPeaucellier({ cellSide: v })}
+      />
+      <Slider
+        label="axis angle"
+        value={radToDeg(c.axisAngle)}
+        min={-180}
+        max={180}
+        step={1}
+        unit="°"
+        precision={0}
+        onChange={(v) => patchPeaucellier({ axisAngle: degToRad(v) })}
       />
       <Note>
         Q inverts P about the pole: |OP|·|OQ| = L² − s². Because P rides a
@@ -558,6 +676,9 @@ export function ControlsPanel() {
       <GearsControls />
       <GenevaControls />
       <StraightLineControls />
+      <AnalysisPanel />
+      <MeasurePanel />
+      <ComparePanel />
 
       <div className="flex gap-2">
         <button
