@@ -8,7 +8,9 @@ export function Header() {
         href="/"
         className="font-mono text-sm font-semibold uppercase tracking-[0.2em] text-ink"
       >
-        Kinemagic
+        Kinema
+        <span className="text-accent">G</span>
+        ic
         <span className="ml-2 hidden text-[10px] font-normal normal-case tracking-normal text-ink-faint sm:inline">
           planar mechanism simulator
         </span>

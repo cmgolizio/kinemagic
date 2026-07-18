@@ -9,3 +9,4 @@ export * from "./mechanisms/straightline";
 export * from "./mechanisms/presets";
 export * from "./mechanisms/random";
 export * from "./analysis";
+export * from "./fab";

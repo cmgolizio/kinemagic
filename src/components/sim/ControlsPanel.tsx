@@ -28,6 +28,7 @@ import {
 } from "@/store/simStore";
 import { AnalysisPanel } from "./AnalysisPanel";
 import { ComparePanel } from "./ComparePanel";
+import { ExportPanel } from "./ExportPanel";
 import { MeasurePanel } from "./MeasurePanel";
 
 // ---------------------------------------------------------------------------
@@ -679,6 +680,7 @@ export function ControlsPanel() {
       <AnalysisPanel />
       <MeasurePanel />
       <ComparePanel />
+      <ExportPanel />
 
       <div className="flex gap-2">
         <button
