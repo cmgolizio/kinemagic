@@ -30,6 +30,7 @@ import { AnalysisPanel } from "./AnalysisPanel";
 import { ComparePanel } from "./ComparePanel";
 import { ExportPanel } from "./ExportPanel";
 import { MeasurePanel } from "./MeasurePanel";
+import { SharePanel } from "./SharePanel";
 
 // ---------------------------------------------------------------------------
 // Small shared pieces
@@ -681,6 +682,7 @@ export function ControlsPanel() {
       <MeasurePanel />
       <ComparePanel />
       <ExportPanel />
+      <SharePanel />
 
       <div className="flex gap-2">
         <button

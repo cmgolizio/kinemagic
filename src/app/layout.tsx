@@ -15,7 +15,18 @@ const plexMono = IBM_Plex_Mono({
   subsets: ["latin"],
 });
 
+// Absolute base for OG/twitter image URLs. Vercel injects its deployment
+// hosts; NEXT_PUBLIC_SITE_URL wins once a custom domain exists.
+const siteUrl =
+  process.env.NEXT_PUBLIC_SITE_URL ??
+  (process.env.VERCEL_PROJECT_PRODUCTION_URL
+    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+    : process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : "http://localhost:3000");
+
 export const metadata: Metadata = {
+  metadataBase: new URL(siteUrl),
   title: "Kinemagic — planar mechanism simulator",
   description:
     "Design four-bar linkages and other planar mechanisms in the browser. Drag joints, watch coupler curves trace live, then export to fabricate.",

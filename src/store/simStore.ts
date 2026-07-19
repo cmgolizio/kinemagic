@@ -79,6 +79,7 @@ import {
   type Vec2,
 } from "@/engine";
 import { fitBounds, type ScreenSize, type ViewState } from "@/components/sim/view";
+import type { SharedMech } from "@/share/codec";
 
 // ---------------------------------------------------------------------------
 // The mechanism library
@@ -471,6 +472,50 @@ function defaultMech(type: MechType): { mech: MechSlice; theta: number } {
   }
 }
 
+// ---------------------------------------------------------------------------
+// URL-share mapping (wire format lives in src/share/codec.ts)
+// ---------------------------------------------------------------------------
+
+/** Snapshot the active mechanism as its shareable wire form. */
+export function sliceToShare(mech: MechSlice, theta: number): SharedMech {
+  switch (mech.type) {
+    case "fourbar":
+      return { t: "fourbar", c: mech.config, th: theta, br: mech.branch };
+    case "slidercrank":
+      return { t: "slidercrank", c: mech.config, th: theta, br: mech.branch };
+    case "cam":
+      return { t: "cam", c: mech.config, th: theta };
+    case "gears":
+      return { t: "gears", c: mech.config, th: theta };
+    case "geneva":
+      return { t: "geneva", c: mech.config, th: theta };
+    case "straightline":
+      return mech.variant === "watt"
+        ? { t: "watt", c: mech.watt, th: theta, br: mech.branch }
+        : { t: "peaucellier", c: mech.peaucellier, th: theta };
+  }
+}
+
+/** Rebuild a fully derived slice from the wire form. */
+function shareToDerived(shared: SharedMech): { mech: MechSlice; theta: number } {
+  switch (shared.t) {
+    case "fourbar":
+      return deriveFourBar(shared.c, shared.th, null, shared.br);
+    case "slidercrank":
+      return deriveSliderCrank(shared.c, shared.th, shared.br);
+    case "cam":
+      return deriveCam(shared.c, shared.th);
+    case "gears":
+      return deriveGears(shared.c, shared.th);
+    case "geneva":
+      return deriveGeneva(shared.c, shared.th);
+    case "watt":
+      return deriveStraightLine("watt", shared.c, defaultPeaucellier(), shared.th, null, shared.br);
+    case "peaucellier":
+      return deriveStraightLine("peaucellier", defaultWatt(), shared.c, shared.th, null, 1);
+  }
+}
+
 /** Flip the assembly branch (used when a limited drive bounces off a limit). */
 function flipBranch(mech: MechSlice): MechSlice {
   switch (mech.type) {
@@ -741,7 +786,17 @@ export interface SimState {
   showCurveBox: boolean;
   /** pinned coupler curve for before/after comparison */
   ghost: GhostCurve | null;
+  /** true once an initial mechanism (URL, challenge, or MOTD) has loaded —
+   * stops the landing-page bootstrap from clobbering explicit loads */
+  bootstrapped: boolean;
+  /** mechanism-of-the-day banner, when the landing page loaded one */
+  motd: { title: string; note: string } | null;
 
+  /** replace the active mechanism from a decoded share payload */
+  loadShared(shared: SharedMech): void;
+  /** loadShared + raise the mechanism-of-the-day banner */
+  loadMotd(motd: { title: string; note: string; mech: SharedMech }): void;
+  dismissMotd(): void;
   setMechType(type: MechType): void;
   setStraightVariant(variant: StraightLineVariant): void;
   applyFourBarPreset(id: string): void;
@@ -805,6 +860,32 @@ export const useSimStore = create<SimState>()((set, get) => ({
   measure: { active: false, a: null, b: null },
   showCurveBox: false,
   ghost: null,
+  bootstrapped: false,
+  motd: null,
+
+  loadShared: (shared) => {
+    const next = shareToDerived(shared);
+    set({
+      mech: next.mech,
+      theta: next.theta,
+      bootstrapped: true,
+      motd: null,
+      driveDir: 1,
+      selected: null,
+      hovered: null,
+      dragging: null,
+      measure: { active: false, a: null, b: null },
+      ghost: null,
+    });
+    get().fitView();
+  },
+
+  loadMotd: (motd) => {
+    get().loadShared(motd.mech);
+    set({ motd: { title: motd.title, note: motd.note } });
+  },
+
+  dismissMotd: () => set({ motd: null }),
 
   setMechType: (type) => {
     const st = get();

@@ -230,6 +230,47 @@ export function sliderStroke(
 }
 
 /**
+ * Quick-return time ratio: at constant crank speed, the crank arc swept
+ * between the slider's two dead centers differs from the arc swept coming
+ * back whenever the axis is offset — the slower sweep over the faster one,
+ * so ≥ 1 (exactly 1 for the in-line layout). Returns null when the crank
+ * cannot fully rotate (a swaying crank has no cycle to time) or the stroke
+ * degenerates.
+ */
+export function quickReturnRatio(
+  config: SliderCrankConfig,
+  steps = 1440,
+): number | null {
+  const range = sliderCrankInputRange(config);
+  if (!range.full) return null;
+  let thAtMin = 0;
+  let thAtMax = 0;
+  let min = Infinity;
+  let max = -Infinity;
+  for (let i = 0; i < steps; i++) {
+    const th = (i / steps) * TWO_PI;
+    const res = solveSliderCrank(config, th, { branch: 1 });
+    if (!res.ok) return null;
+    if (res.sliderPos < min) {
+      min = res.sliderPos;
+      thAtMin = th;
+    }
+    if (res.sliderPos > max) {
+      max = res.sliderPos;
+      thAtMax = th;
+    }
+  }
+  if (!(max - min > 1e-9)) return null;
+  // Crank arc from outer dead center to inner, sweeping in +θ.
+  let arc = thAtMin - thAtMax;
+  arc %= TWO_PI;
+  if (arc < 0) arc += TWO_PI;
+  const other = TWO_PI - arc;
+  const lo = Math.min(arc, other);
+  return lo > 1e-6 ? Math.max(arc, other) / lo : null;
+}
+
+/**
  * Closed-form piston position for the in-line/offset slider-crank with the
  * axis along +x through the origin: x = r·cosθ + √(l² − (r·sinθ − e)²).
  * Exists for cross-checking the general solver in tests.

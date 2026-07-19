@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   defaultSliderCrank,
   pistonPositionClosedForm,
+  quickReturnRatio,
   sliderCrankInputRange,
   sliderStroke,
   solveSliderCrank,
@@ -211,5 +212,57 @@ describe("stroke", () => {
     if (!s) return;
     expect(s.max).toBeCloseTo(120, 6);
     expect(s.min).toBeCloseTo(60, 6);
+  });
+});
+
+describe("quickReturnRatio", () => {
+  it("is 1 for the symmetric in-line layout", () => {
+    const ratio = quickReturnRatio(defaultSliderCrank());
+    expect(ratio).not.toBeNull();
+    expect(ratio!).toBeCloseTo(1, 2);
+  });
+
+  it("matches the dead-center closed form for an offset layout", () => {
+    // Dead centers put crank and rod collinear: outer at asin(e/(l+r)),
+    // inner at π + asin(e/(l−r)); the ratio is slowArc/fastArc.
+    const r = 32;
+    const l = 95;
+    const e = 38;
+    const cfg: SliderCrankConfig = {
+      O2: vec(-60, 0),
+      crankLen: r,
+      rodLen: l,
+      axisAngle: 0,
+      offset: e,
+    };
+    const phiOut = Math.asin(e / (l + r));
+    const phiIn = Math.asin(e / (l - r));
+    const expected = (Math.PI + phiIn - phiOut) / (Math.PI - phiIn + phiOut);
+    const ratio = quickReturnRatio(cfg);
+    expect(ratio).not.toBeNull();
+    expect(ratio!).toBeCloseTo(expected, 2);
+    expect(ratio!).toBeGreaterThan(1);
+  });
+
+  it("is symmetric in the sign of the offset", () => {
+    const base = { ...defaultSliderCrank(), crankLen: 30, rodLen: 90 };
+    const up = quickReturnRatio({ ...base, offset: 40 });
+    const down = quickReturnRatio({ ...base, offset: -40 });
+    expect(up).not.toBeNull();
+    expect(down).not.toBeNull();
+    expect(up!).toBeCloseTo(down!, 6);
+  });
+
+  it("returns null when the crank cannot fully rotate", () => {
+    // crank + offset beyond the rod's reach → the input only sways.
+    const cfg: SliderCrankConfig = {
+      O2: vec(0, 0),
+      crankLen: 50,
+      rodLen: 60,
+      axisAngle: 0,
+      offset: 20,
+    };
+    expect(sliderCrankInputRange(cfg).full).toBe(false);
+    expect(quickReturnRatio(cfg)).toBeNull();
   });
 });
